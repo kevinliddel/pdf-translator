@@ -1,14 +1,17 @@
 import copy
+import os
 import re
 import sys
 import tempfile
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Tuple, Union
+from typing import List, Literal, Tuple, Union
 
 import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 import PyPDF2
+import torch
 import uvicorn
 from fastapi import FastAPI, File, UploadFile
 from fastapi.responses import FileResponse
@@ -20,7 +23,23 @@ from transformers import MarianMTModel, MarianTokenizer
 
 sys.path.append(str(Path(__file__).parent.parent))
 
-from utils import LayoutAnalyzer, OCRModel, fw_fill
+from utils import OCRModel, fw_fill
+
+
+@dataclass
+class LayoutRegion:
+    type: Literal["text", "title", "list", "table", "figure"]
+    bbox: tuple[int, int, int, int]
+    score: float
+    image: np.ndarray = field(init=False)
+
+
+class FullPageLayoutAnalyzer:
+    def __call__(self, image: np.ndarray) -> list[LayoutRegion]:
+        height, width = image.shape[:2]
+        layout = LayoutRegion(type="text", bbox=(0, 0, width, height), score=1.0)
+        layout.image = image
+        return [layout]
 
 
 class InputPdf(BaseModel):
@@ -69,7 +88,11 @@ class TranslateApi:
             methods=["GET"],
         )
 
-        self.__load_models(model_root_dir)
+        self.__load_models(
+            model_root_dir,
+            device=os.getenv("PDF_TRANSLATOR_DEVICE", "auto"),
+            layout_backend=os.getenv("PDF_TRANSLATOR_LAYOUT_BACKEND", "auto"),
+        )
         self.temp_dir = tempfile.TemporaryDirectory()
         self.temp_dir_name = Path(self.temp_dir.name)
 
@@ -160,7 +183,69 @@ class TranslateApi:
 
         self.__merge_pdfs(pdf_files)
 
-    def __load_models(self, model_root_dir: Path, device: str = "cuda"):
+    def __resolve_device(self, device: str) -> str:
+        requested_device = device.lower()
+        if requested_device not in {"auto", "cuda", "mps", "cpu"}:
+            raise ValueError(
+                f"Unsupported device: {device}. Use one of auto/cuda/mps/cpu."
+            )
+
+        if requested_device == "auto":
+            if torch.cuda.is_available():
+                return "cuda"
+            if torch.backends.mps.is_available() and torch.backends.mps.is_built():
+                return "mps"
+            return "cpu"
+
+        if requested_device == "cuda" and not torch.cuda.is_available():
+            print("CUDA is not available. Falling back to CPU.")
+            return "cpu"
+
+        if requested_device == "mps" and not (
+            torch.backends.mps.is_available() and torch.backends.mps.is_built()
+        ):
+            print("MPS is not available. Falling back to CPU.")
+            return "cpu"
+
+        return requested_device
+
+    def __load_layout_model(
+        self,
+        model_root_dir: Path,
+        device: str,
+        layout_backend: str,
+    ):
+        backend = layout_backend.lower()
+        if backend not in {"auto", "detectron2", "none"}:
+            raise ValueError(
+                "Unsupported layout backend. Use one of auto/detectron2/none."
+            )
+
+        if backend == "none":
+            print("Using full-page layout fallback backend.")
+            return FullPageLayoutAnalyzer()
+
+        try:
+            from utils.layout_model import LayoutAnalyzer
+
+            return LayoutAnalyzer(model_root_dir=model_root_dir, device=device)
+        except Exception as error:
+            if backend == "detectron2":
+                raise RuntimeError(
+                    "Detectron2 layout backend was requested but failed to load."
+                ) from error
+            print(
+                "Detectron2 layout backend unavailable. "
+                "Falling back to full-page layout mode."
+            )
+            return FullPageLayoutAnalyzer()
+
+    def __load_models(
+        self,
+        model_root_dir: Path,
+        device: str = "auto",
+        layout_backend: str = "auto",
+    ):
         """Backend function for loading models.
 
         Called in the constructor.
@@ -171,24 +256,31 @@ class TranslateApi:
         model_root_dir: Path
             Path to the directory containing the models.
         device: str
-            Device to use for the layout model.
-            Defaults to "cuda".
+            Device to use for model execution.
+            Defaults to "auto".
+        layout_backend: str
+            Layout backend to use.
+            Defaults to "auto".
         """
         self.font = ImageFont.truetype(
             str(model_root_dir / "SourceHanSerif-Light.otf"),
             size=self.FONT_SIZE,
         )
-        self.device = device
+        self.device = self.__resolve_device(device)
+        self.translation_device = "cuda" if self.device == "cuda" else "cpu"
 
-        self.layout_model = LayoutAnalyzer(
-            model_root_dir=model_root_dir / "unilm", device=self.device
+        self.layout_model = self.__load_layout_model(
+            model_root_dir=model_root_dir / "unilm",
+            device="cuda" if self.device == "cuda" else "cpu",
+            layout_backend=layout_backend,
         )
         self.ocr_model = OCRModel(
-            model_root_dir=model_root_dir / "paddle-ocr", device=self.device
+            model_root_dir=model_root_dir / "paddle-ocr",
+            device="cuda" if self.device == "cuda" else "cpu",
         )
 
         self.translate_model = MarianMTModel.from_pretrained("staka/fugumt-en-ja").to(
-            self.device
+            self.translation_device
         )
         self.translate_tokenizer = MarianTokenizer.from_pretrained("staka/fugumt-en-ja")
 
@@ -302,7 +394,7 @@ class TranslateApi:
         translated_texts = []
         for i, t in enumerate(texts):
             inputs = self.translate_tokenizer(t, return_tensors="pt").input_ids.to(
-                self.device
+                self.translation_device
             )
             outputs = self.translate_model.generate(inputs, max_length=512)
             res = self.translate_tokenizer.decode(outputs[0], skip_special_tokens=True)
@@ -372,5 +464,9 @@ class TranslateApi:
 
 
 if __name__ == "__main__":
-    translate_api = TranslateApi()
+    translate_api = TranslateApi(
+        model_root_dir=Path(
+            os.getenv("PDF_TRANSLATOR_MODEL_ROOT_DIR", "/resources/models/")
+        )
+    )
     translate_api.run()

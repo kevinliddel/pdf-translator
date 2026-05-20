@@ -1,14 +1,20 @@
 NAME=pdf-translator
 TAG=0.1.0
+CPU_TAG=0.1.0-cpu
 PROJECT_DIRECTORY=$(shell pwd)/..
+CONTAINER_NAME=pdf-translator
+CPU_CONTAINER_NAME=pdf-translator-cpu
 
 build:
 	docker build -t ${NAME}:${TAG} .
 
+build-cpu:
+	docker build -f Dockerfile.cpu -t ${NAME}:${CPU_TAG} .
+
 run:
 	docker run -it \
 		--runtime=nvidia \
-		--name pdf-translator \
+		--name ${CONTAINER_NAME} \
 		-v ${PROJECT_DIRECTORY}:/app \
 		--gpus all \
 		-d --restart=always \
@@ -16,16 +22,56 @@ run:
 		-p 8288:8288 \
 		${NAME}:${TAG} /bin/bash -c "chmod +x /app/docker/start.sh && /app/docker/start.sh"
 
+run-cpu:
+	docker run -it \
+		--name ${CPU_CONTAINER_NAME} \
+		-v ${PROJECT_DIRECTORY}:/app \
+		-d --restart=always \
+		-p 8765:8765 \
+		-p 8288:8288 \
+		-e PDF_TRANSLATOR_DEVICE=auto \
+		-e PDF_TRANSLATOR_LAYOUT_BACKEND=none \
+		${NAME}:${CPU_TAG} /bin/bash -c "chmod +x /app/docker/start-cpu.sh && /app/docker/start-cpu.sh"
+
 run-bash:
 	docker run -it \
 		--runtime=nvidia \
-		--name pdf-translator \
+		--name ${CONTAINER_NAME} \
 		-v ${PROJECT_DIRECTORY}:/app \
 		--gpus all \
 		-d --restart=always \
 		-p 8765:8765 \
 		-p 8288:8288 \
 		${NAME}:${TAG} /bin/bash
+
+run-bash-cpu:
+	docker run -it \
+		--name ${CPU_CONTAINER_NAME} \
+		-v ${PROJECT_DIRECTORY}:/app \
+		-d --restart=always \
+		-p 8765:8765 \
+		-p 8288:8288 \
+		${NAME}:${CPU_TAG} /bin/bash
+
+local-run:
+	@cd ${PROJECT_DIRECTORY} && \
+		export PDF_TRANSLATOR_MODEL_ROOT_DIR=${PROJECT_DIRECTORY}/models && \
+		export PDF_TRANSLATOR_DEVICE=auto && \
+		export PDF_TRANSLATOR_LAYOUT_BACKEND=none && \
+		python3 gui.py & \
+		cd server && \
+		python3 main.py
+
+local-run-api:
+	@cd ${PROJECT_DIRECTORY} && \
+		export PDF_TRANSLATOR_MODEL_ROOT_DIR=${PROJECT_DIRECTORY}/models && \
+		export PDF_TRANSLATOR_DEVICE=auto && \
+		export PDF_TRANSLATOR_LAYOUT_BACKEND=none && \
+		python3 server/main.py
+
+local-run-gui:
+	@cd ${PROJECT_DIRECTORY} && \
+		python3 gui.py
 
 translate:
 	@cd ${PROJECT_DIRECTORY} && \
