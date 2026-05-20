@@ -47,6 +47,13 @@ Use bash in the GPU container:
 make run-bash
 ```
 
+Stop/remove GPU container:
+
+```bash
+make stop
+make rm
+```
+
 ## Installation (Docker / CPU / Mac)
 
 This mode avoids NVIDIA runtime and works with Docker Desktop on macOS and CPU-only hosts.
@@ -74,6 +81,13 @@ Use bash in the CPU container:
 
 ```bash
 make run-bash-cpu
+```
+
+Stop/remove CPU container:
+
+```bash
+make stop-cpu
+make rm-cpu
 ```
 
 ## Installation (Local / Mac Intel / M1 / CPU)

@@ -73,6 +73,32 @@ local-run-gui:
 	@cd ${PROJECT_DIRECTORY} && \
 		python3 gui.py
 
+logs:
+	docker logs -f ${CONTAINER_NAME}
+
+logs-cpu:
+	docker logs -f ${CPU_CONTAINER_NAME}
+
+stop:
+	-docker stop ${CONTAINER_NAME}
+
+stop-cpu:
+	-docker stop ${CPU_CONTAINER_NAME}
+
+rm:
+	-docker rm ${CONTAINER_NAME}
+
+rm-cpu:
+	-docker rm ${CPU_CONTAINER_NAME}
+
+clean:
+	-docker stop ${CONTAINER_NAME}
+	-docker rm ${CONTAINER_NAME}
+
+clean-cpu:
+	-docker stop ${CPU_CONTAINER_NAME}
+	-docker rm ${CPU_CONTAINER_NAME}
+
 translate:
 	@cd ${PROJECT_DIRECTORY} && \
 		python3 cli.py -i ${INPUT}
