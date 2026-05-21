@@ -42,7 +42,7 @@ def translate_request(file: Any) -> tuple[Path, list[Image.Image]]:
 if __name__ == "__main__":
     global temp_dir
     with TemporaryDirectory() as temp_dir:
-        with gr.Blocks(theme="Soft") as demo:
+        with gr.Blocks() as demo:
             with gr.Column():
                 title = gr.Markdown("## PDF Translator")
                 file = gr.File(label="ここにPDFをアップロード")
@@ -56,4 +56,4 @@ if __name__ == "__main__":
                     outputs=[translated_file, pdf_images],
                 )
 
-        demo.queue().launch(server_name="0.0.0.0", server_port=8288)
+        demo.queue().launch(server_name="0.0.0.0", server_port=8288, theme="Soft")

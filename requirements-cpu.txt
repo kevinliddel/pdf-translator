@@ -4,6 +4,7 @@ opencv-python-headless
 networkx
 transformers==4.30
 sentencepiece
+sacremoses
 pdf2image
 fastapi[uvicorn]
 uvicorn
