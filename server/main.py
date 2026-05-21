@@ -274,6 +274,9 @@ class TranslateApi:
             device="cuda" if self.device == "cuda" else "cpu",
             layout_backend=layout_backend,
         )
+        self.use_full_page_fallback = isinstance(
+            self.layout_model, FullPageLayoutAnalyzer
+        )
         self.ocr_model = OCRModel(
             model_root_dir=model_root_dir / "paddle-ocr",
             device="cuda" if self.device == "cuda" else "cpu",
@@ -311,6 +314,14 @@ class TranslateApi:
         """
         img = np.array(image, dtype=np.uint8)
         original_img = copy.deepcopy(img)
+
+        if self.use_full_page_fallback:
+            return self.__translate_one_page_with_ocr_boxes(
+                img=img,
+                original_img=original_img,
+                reached_references=reached_references,
+            )
+
         result = self.layout_model(cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
         for line in result:
             if line.type in ["text", "list"]:
@@ -370,6 +381,73 @@ class TranslateApi:
                     continue
                 if title.lower() == "references" or title.lower() == "reference":
                     reached_references = True
+
+        return img, original_img, reached_references
+
+    def __normalize_quad_box(
+        self, box: np.ndarray, image_shape: tuple[int, int, int]
+    ) -> tuple[int, int, int, int]:
+        points = np.array(box, dtype=np.float32).reshape(-1, 2)
+        x1 = max(0, int(np.floor(points[:, 0].min())))
+        y1 = max(0, int(np.floor(points[:, 1].min())))
+        x2 = min(image_shape[1], int(np.ceil(points[:, 0].max())))
+        y2 = min(image_shape[0], int(np.ceil(points[:, 1].max())))
+        return x1, y1, x2, y2
+
+    def __translate_one_page_with_ocr_boxes(
+        self,
+        img: np.ndarray,
+        original_img: np.ndarray,
+        reached_references: bool,
+    ) -> Tuple[np.ndarray, np.ndarray, bool]:
+        ocr_boxes, ocr_results, _ = self.ocr_model(img)
+        if ocr_boxes is None or ocr_results is None:
+            return img, original_img, reached_references
+
+        for box, result in zip(ocr_boxes, ocr_results):
+            text = result[0].strip()
+            if not text:
+                continue
+
+            text = re.sub(r"\n|\t|\[|\]|\/|\|", " ", text).strip()
+            if not text:
+                continue
+
+            if text.lower() in ["references", "reference"]:
+                reached_references = True
+                break
+
+            translated_text = self.__translate(text)
+            if not translated_text:
+                continue
+
+            if len(
+                re.findall(
+                    r"[^\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\u3400-\u4DBF]",
+                    translated_text,
+                )
+            ) > 0.9 * len(translated_text):
+                continue
+
+            x1, y1, x2, y2 = self.__normalize_quad_box(box, img.shape)
+            if x2 <= x1 or y2 <= y1:
+                continue
+
+            processed_text = fw_fill(
+                translated_text,
+                width=max(1, int((x2 - x1) / (self.FONT_SIZE / 2)) - 1),
+            )
+
+            new_block = Image.new("RGB", (x2 - x1, y2 - y1), color=(255, 255, 255))
+            draw = ImageDraw.Draw(new_block)
+            draw.text(
+                (0, 0),
+                text=processed_text,
+                font=self.font,
+                fill=(0, 0, 0),
+            )
+
+            img[y1:y2, x1:x2] = np.array(new_block)
 
         return img, original_img, reached_references
 
