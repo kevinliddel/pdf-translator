@@ -90,6 +90,38 @@ make stop-cpu
 make rm-cpu
 ```
 
+## Option A: CPU high-fidelity layout (detectron2)
+
+This mode tries to preserve layout better by enabling `LayoutAnalyzer` on CPU via detectron2.
+It is significantly slower and the image build is heavier than `build-cpu`.
+
+1. **Build high-fidelity CPU image**
+
+```bash
+cd pdf-translator/docker
+make build-cpu-hifi
+```
+
+2. **Run high-fidelity CPU container**
+
+```bash
+make run-cpu-hifi
+```
+
+3. **Open services**
+
+```bash
+GUI: http://localhost:9288
+API: http://localhost:9765
+```
+
+4. **Logs and cleanup**
+
+```bash
+make logs-cpu-hifi
+make clean-cpu-hifi
+```
+
 ## Installation (Local / Mac Intel / M1 / CPU)
 
 This mode is experimental and slower than CUDA mode, but it enables local runs on macOS and CPU-only environments.

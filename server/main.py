@@ -268,6 +268,10 @@ class TranslateApi:
         )
         self.device = self.__resolve_device(device)
         self.translation_device = "cuda" if self.device == "cuda" else "cpu"
+        self.use_supplemental_ocr_pass = (
+            os.getenv("PDF_TRANSLATOR_SUPPLEMENTAL_OCR_PASS", "1") != "0"
+            and self.device != "cuda"
+        )
 
         self.layout_model = self.__load_layout_model(
             model_root_dir=model_root_dir / "unilm",
@@ -324,63 +328,63 @@ class TranslateApi:
 
         result = self.layout_model(cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
         for line in result:
-            if line.type in ["text", "list"]:
-                ocr_results = list(map(lambda x: x[0], self.ocr_model(line.image)[1]))
-
-                if len(ocr_results) > 1:
-                    text = " ".join(ocr_results)
-                    text = re.sub(r"\n|\t|\[|\]|\/|\|", " ", text)
-                    translated_text = self.__translate(text)
-
-                    # if almost all characters in translated text are not japanese characters, skip
-                    if len(
-                        re.findall(
-                            r"[^\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\u3400-\u4DBF]",
-                            translated_text,
-                        )
-                    ) > 0.8 * len(translated_text):
-                        print("skipped")
-                        continue
-
-                    # if text is too short, skip
-                    if len(translated_text) < 20:
-                        print("skipped")
-                        continue
-
-                    processed_text = fw_fill(
-                        translated_text,
-                        width=int((line.bbox[2] - line.bbox[0]) / (self.FONT_SIZE / 2))
-                        - 1,
-                    )
-                    print(processed_text)
-
-                    new_block = Image.new(
-                        "RGB",
-                        (
-                            line.bbox[2] - line.bbox[0],
-                            line.bbox[3] - line.bbox[1],
-                        ),
-                        color=(255, 255, 255),
-                    )
-                    draw = ImageDraw.Draw(new_block)
-                    draw.text(
-                        (0, 0),
-                        text=processed_text,
-                        font=self.font,
-                        fill=(0, 0, 0),
-                    )
-                    new_block = np.array(new_block)
-                    img[
-                        int(line.bbox[1]) : int(line.bbox[3]),
-                        int(line.bbox[0]) : int(line.bbox[2]),
-                    ] = new_block
-            elif line.type == "title":
-                try:
-                    title = self.ocr_model(line.image)[1][0][0]
-                except IndexError:
+            if line.type in ["text", "list", "title"]:
+                ocr_output = self.ocr_model(line.image)
+                if ocr_output is None or ocr_output[1] is None:
                     continue
-                if title.lower() == "references" or title.lower() == "reference":
+
+                ocr_results = [result[0].strip() for result in ocr_output[1] if result]
+                ocr_results = [result for result in ocr_results if result]
+                if not ocr_results:
+                    continue
+
+                text = " ".join(ocr_results)
+                text = re.sub(r"\n|\t|\[|\]|\/|\|", " ", text).strip()
+                if not text:
+                    continue
+
+                if text.lower() in ["references", "reference"]:
                     reached_references = True
+                    continue
+
+                translated_text = self.__translate(text)
+                if not translated_text:
+                    continue
+
+                processed_text = fw_fill(
+                    translated_text,
+                    width=int((line.bbox[2] - line.bbox[0]) / (self.FONT_SIZE / 2)) - 1,
+                )
+                print(processed_text)
+
+                new_block = Image.new(
+                    "RGB",
+                    (
+                        line.bbox[2] - line.bbox[0],
+                        line.bbox[3] - line.bbox[1],
+                    ),
+                    color=(255, 255, 255),
+                )
+                draw = ImageDraw.Draw(new_block)
+                draw.text(
+                    (0, 0),
+                    text=processed_text,
+                    font=self.font,
+                    fill=(0, 0, 0),
+                )
+                new_block = np.array(new_block)
+                img[
+                    int(line.bbox[1]) : int(line.bbox[3]),
+                    int(line.bbox[0]) : int(line.bbox[2]),
+                ] = new_block
+        if self.use_supplemental_ocr_pass and not reached_references:
+            img, _, _ = self.__translate_one_page_with_ocr_boxes(
+                img=img,
+                original_img=original_img,
+                reached_references=False,
+                ocr_source_img=original_img,
+                detect_references=False,
+            )
 
         return img, original_img, reached_references
 
@@ -399,8 +403,11 @@ class TranslateApi:
         img: np.ndarray,
         original_img: np.ndarray,
         reached_references: bool,
+        ocr_source_img: np.ndarray = None,
+        detect_references: bool = True,
     ) -> Tuple[np.ndarray, np.ndarray, bool]:
-        ocr_boxes, ocr_results, _ = self.ocr_model(img)
+        source_img = ocr_source_img if ocr_source_img is not None else img
+        ocr_boxes, ocr_results, _ = self.ocr_model(source_img)
         if ocr_boxes is None or ocr_results is None:
             return img, original_img, reached_references
 
@@ -413,20 +420,12 @@ class TranslateApi:
             if not text:
                 continue
 
-            if text.lower() in ["references", "reference"]:
+            if detect_references and text.lower() in ["references", "reference"]:
                 reached_references = True
                 break
 
             translated_text = self.__translate(text)
             if not translated_text:
-                continue
-
-            if len(
-                re.findall(
-                    r"[^\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\u3400-\u4DBF]",
-                    translated_text,
-                )
-            ) > 0.9 * len(translated_text):
                 continue
 
             x1, y1, x2, y2 = self.__normalize_quad_box(box, img.shape)
