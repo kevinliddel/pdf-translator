@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -9,6 +10,7 @@ from PIL import Image
 
 TRANSLATE_URL = "http://localhost:8765/translate_pdf/"
 CLEAR_TEMP_URL = "http://localhost:8765/clear_temp_dir/"
+REQUEST_TIMEOUT = int(os.getenv("PDF_TRANSLATOR_REQUEST_TIMEOUT", "14400"))
 
 
 def translate_request(file: Any) -> tuple[str, list[Image.Image]]:
@@ -33,7 +35,7 @@ def translate_request(file: Any) -> tuple[str, list[Image.Image]]:
             response = requests.post(
                 TRANSLATE_URL,
                 files={"input_pdf": input_pdf},
-                timeout=1800,
+                timeout=REQUEST_TIMEOUT,
             )
         except requests.RequestException as error:
             raise gr.Error(f"Failed to connect to translation server: {error}")

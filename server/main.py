@@ -268,10 +268,6 @@ class TranslateApi:
         )
         self.device = self.__resolve_device(device)
         self.translation_device = "cuda" if self.device == "cuda" else "cpu"
-        self.use_supplemental_ocr_pass = (
-            os.getenv("PDF_TRANSLATOR_SUPPLEMENTAL_OCR_PASS", "1") != "0"
-            and self.device != "cuda"
-        )
 
         self.layout_model = self.__load_layout_model(
             model_root_dir=model_root_dir / "unilm",
@@ -377,14 +373,6 @@ class TranslateApi:
                     int(line.bbox[1]) : int(line.bbox[3]),
                     int(line.bbox[0]) : int(line.bbox[2]),
                 ] = new_block
-        if self.use_supplemental_ocr_pass and not reached_references:
-            img, _, _ = self.__translate_one_page_with_ocr_boxes(
-                img=img,
-                original_img=original_img,
-                reached_references=False,
-                ocr_source_img=original_img,
-                detect_references=False,
-            )
 
         return img, original_img, reached_references
 
@@ -403,11 +391,8 @@ class TranslateApi:
         img: np.ndarray,
         original_img: np.ndarray,
         reached_references: bool,
-        ocr_source_img: np.ndarray = None,
-        detect_references: bool = True,
     ) -> Tuple[np.ndarray, np.ndarray, bool]:
-        source_img = ocr_source_img if ocr_source_img is not None else img
-        ocr_boxes, ocr_results, _ = self.ocr_model(source_img)
+        ocr_boxes, ocr_results, _ = self.ocr_model(img)
         if ocr_boxes is None or ocr_results is None:
             return img, original_img, reached_references
 
@@ -420,7 +405,7 @@ class TranslateApi:
             if not text:
                 continue
 
-            if detect_references and text.lower() in ["references", "reference"]:
+            if text.lower() in ["references", "reference"]:
                 reached_references = True
                 break
 
